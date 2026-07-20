@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type ActionLog = {
   id: number;
@@ -66,6 +66,19 @@ export default function Home() {
   const [editingLogId, setEditingLogId] = useState<number | null>(null);
   const [logDraft, setLogDraft] = useState({ action: "E-mailed", details: "", occurredAt: "" });
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/leads")
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Could not load saved leads")))
+      .then(async (data: { leads?: Lead[] }) => {
+        if (cancelled) return;
+        if (data.leads?.length) setLeads(data.leads);
+        else await fetch("/api/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leads: seedLeads }) });
+      })
+      .catch(() => { if (!cancelled) announce("Saved data is temporarily unavailable"); });
+    return () => { cancelled = true; };
+  }, []);
+
   const filtered = useMemo(() => leads.filter((lead) => {
     const matchesCategory = activeCategory === "All leads" || lead.type === activeCategory;
     const haystack = `${lead.name} ${lead.city} ${lead.state} ${lead.country} ${lead.tags.join(" ")}`.toLowerCase();
@@ -80,6 +93,10 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2600);
   }
 
+  function persistLead(lead: Lead) {
+    return fetch("/api/leads", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(lead) });
+  }
+
   function exportCsv() {
     const headers = ["Company", "Type", "City", "State", "Country", "Budget range", "Fit", "Tier", "Contact", "Title", "Email", "Website", "Status", "Why they fit Norma"];
     const rows = leads.map((lead) => [lead.name, lead.type, lead.city, lead.state, lead.country, lead.range, lead.fit, lead.tier, lead.contact, lead.title, lead.email, lead.website, lead.status, lead.note]);
@@ -92,11 +109,15 @@ export default function Home() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const next: Lead = { id: Date.now(), name: String(form.get("name")), type: String(form.get("type")), city: String(form.get("city")), state: String(form.get("state")), country: "USA", range: "$50K-$1M", fit: 6, tier: "C", contact: "-", title: "-", email: "-", website: String(form.get("website")), status: "Researching", next: "Set date", note: "New lead added to the Norma financing database.", tags: [String(form.get("type")), "New lead"] };
-    setLeads((current) => [next, ...current]); setSelectedId(next.id); setShowAdd(false); announce(`${next.name} added to the database`);
+    setLeads((current) => [next, ...current]); void persistLead(next); setSelectedId(next.id); setShowAdd(false); announce(`${next.name} added to the database`);
   }
 
   function updateStatus(id: number, status: string) {
-    setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, status } : lead));
+    const lead = leads.find((item) => item.id === id);
+    if (!lead) return;
+    const updatedLead = { ...lead, status };
+    setLeads((current) => current.map((item) => item.id === id ? updatedLead : item));
+    void persistLead(updatedLead);
     setSelectedId(id);
   }
 
@@ -125,12 +146,12 @@ export default function Home() {
     event.preventDefault();
     if (!logDraft.details.trim() || !logDraft.occurredAt) return;
     const nextLog: ActionLog = { id: editingLogId ?? Date.now(), action: logDraft.action, details: logDraft.details.trim(), occurredAt: logDraft.occurredAt };
-    setLeads((current) => current.map((lead) => {
-      if (lead.id !== leadId) return lead;
-      const actions = lead.actions ?? [];
-      return { ...lead, actions: editingLogId ? actions.map((log) => log.id === editingLogId ? nextLog : log) : [nextLog, ...actions] };
-    }));
     const lead = leads.find((item) => item.id === leadId);
+    if (!lead) return;
+    const actions = lead.actions ?? [];
+    const updatedLead = { ...lead, actions: editingLogId ? actions.map((log) => log.id === editingLogId ? nextLog : log) : [nextLog, ...actions] };
+    setLeads((current) => current.map((item) => item.id === leadId ? updatedLead : item));
+    void persistLead(updatedLead);
     announce(`${editingLogId ? "Log updated for" : "Action logged for"} ${lead?.name ?? "contact"}`);
     setLoggingId(null);
     setEditingLogId(null);
