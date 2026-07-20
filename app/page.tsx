@@ -7,6 +7,16 @@ type ActionLog = {
   action: string;
   details: string;
   occurredAt: string;
+  contactId?: number;
+};
+
+type Contact = {
+  id: number;
+  name: string;
+  title: string;
+  email: string;
+  phone?: string;
+  notes?: string;
 };
 
 type Lead = {
@@ -27,6 +37,7 @@ type Lead = {
   next: string;
   note: string;
   tags: string[];
+  contacts?: Contact[];
   actions?: ActionLog[];
 };
 
@@ -50,8 +61,22 @@ const seedLeads: Lead[] = [
 const categories = ["All leads", "Packaging", "Production", "Finance", "Producer Rep", "Tax Credit", "Film Lab", "Attorney", "Film Market"];
 const pipelineStages = ["Researching", "To contact", "Needs warm intro", "Follow-up", "Closed"];
 
+function normalizeLead(raw: Omit<Lead, "contacts"> & Partial<Pick<Lead, "contacts">>): Lead {
+  const legacyContact = raw.contact && raw.contact !== "-" ? [{ id: raw.id * 100 + 1, name: raw.contact, title: raw.title === "-" ? "" : raw.title, email: raw.email === "-" ? "" : raw.email }] : [];
+  const contacts = raw.contacts?.length ? raw.contacts : legacyContact;
+  return { ...raw, contacts, contact: contacts.map((contact) => contact.name).join(" · ") || "-", title: contacts.map((contact) => contact.title).filter(Boolean).join(" · ") || "-", email: contacts.map((contact) => contact.email).filter(Boolean).join(" · ") || "-" } as Lead;
+}
+
+function contactsFor(lead: Lead): Contact[] {
+  return lead.contacts?.length ? lead.contacts : lead.contact !== "-" ? [{ id: lead.id * 100 + 1, name: lead.contact, title: lead.title === "-" ? "" : lead.title, email: lead.email === "-" ? "" : lead.email }] : [];
+}
+
+function primaryContact(lead: Lead) {
+  return contactsFor(lead)[0] ?? { id: lead.id * 100 + 1, name: lead.contact, title: lead.title, email: lead.email };
+}
+
 export default function Home() {
-  const [leads, setLeads] = useState(seedLeads);
+  const [leads, setLeads] = useState(seedLeads.map(normalizeLead));
   const [activeCategory, setActiveCategory] = useState("All leads");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(1);
@@ -64,6 +89,8 @@ export default function Home() {
   const [draggedId, setDraggedId] = useState<number | null>(null);
   const [loggingId, setLoggingId] = useState<number | null>(null);
   const [editingLogId, setEditingLogId] = useState<number | null>(null);
+  const [logContactId, setLogContactId] = useState<number | null>(null);
+  const [showAddContact, setShowAddContact] = useState(false);
   const [logDraft, setLogDraft] = useState({ action: "E-mailed", details: "", occurredAt: "" });
 
   useEffect(() => {
@@ -72,7 +99,7 @@ export default function Home() {
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Could not load saved leads")))
       .then(async (data: { leads?: Lead[] }) => {
         if (cancelled) return;
-        if (data.leads?.length) setLeads(data.leads);
+        if (data.leads?.length) setLeads(data.leads.map(normalizeLead));
         else await fetch("/api/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leads: seedLeads }) });
       })
       .catch(() => { if (!cancelled) announce("Saved data is temporarily unavailable"); });
@@ -81,7 +108,7 @@ export default function Home() {
 
   const filtered = useMemo(() => leads.filter((lead) => {
     const matchesCategory = activeCategory === "All leads" || lead.type === activeCategory;
-    const haystack = `${lead.name} ${lead.city} ${lead.state} ${lead.country} ${lead.tags.join(" ")}`.toLowerCase();
+    const haystack = `${lead.name} ${lead.city} ${lead.state} ${lead.country} ${lead.tags.join(" ")} ${contactsFor(lead).map((contact) => `${contact.name} ${contact.title} ${contact.email}`).join(" ")}`.toLowerCase();
     const matchesStatus = statusFilter === "All statuses" || lead.status === statusFilter;
     return matchesCategory && matchesStatus && haystack.includes(query.toLowerCase());
   }), [leads, activeCategory, query, statusFilter]);
@@ -89,6 +116,7 @@ export default function Home() {
   const aCount = leads.filter((lead) => lead.tier === "A").length;
 
   function announce(message: string) {
+    if (message === "More lead actions coming soon") setShowAddContact(true);
     setToast(message);
     window.setTimeout(() => setToast(""), 2600);
   }
@@ -99,7 +127,7 @@ export default function Home() {
 
   function exportCsv() {
     const headers = ["Company", "Type", "City", "State", "Country", "Budget range", "Fit", "Tier", "Contact", "Title", "Email", "Website", "Status", "Why they fit Norma"];
-    const rows = leads.map((lead) => [lead.name, lead.type, lead.city, lead.state, lead.country, lead.range, lead.fit, lead.tier, lead.contact, lead.title, lead.email, lead.website, lead.status, lead.note]);
+    const rows = leads.map((lead) => [lead.name, lead.type, lead.city, lead.state, lead.country, lead.range, lead.fit, lead.tier, contactsFor(lead).map((contact) => contact.name).join(" | "), contactsFor(lead).map((contact) => contact.title).join(" | "), contactsFor(lead).map((contact) => contact.email).join(" | "), lead.website, lead.status, lead.note]);
     const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const link = document.createElement("a"); link.href = url; link.download = "norma-financing-crm.csv"; link.click(); URL.revokeObjectURL(url);
@@ -108,7 +136,8 @@ export default function Home() {
   function addLead(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const next: Lead = { id: Date.now(), name: String(form.get("name")), type: String(form.get("type")), city: String(form.get("city")), state: String(form.get("state")), country: "USA", range: "$50K-$1M", fit: 6, tier: "C", contact: "-", title: "-", email: "-", website: String(form.get("website")), status: "Researching", next: "Set date", note: "New lead added to the Norma financing database.", tags: [String(form.get("type")), "New lead"] };
+    const contactName = String(form.get("contact") ?? "").trim();
+    const next: Lead = normalizeLead({ id: Date.now(), name: String(form.get("name")), type: String(form.get("type")), city: String(form.get("city")), state: String(form.get("state")), country: "USA", range: "$50K-$1M", fit: 6, tier: "C", contact: contactName || "-", title: String(form.get("title") ?? "-") || "-", email: String(form.get("email") ?? "-") || "-", website: String(form.get("website")), status: "Researching", next: "Set date", note: "New lead added to the Norma financing database.", tags: [String(form.get("type")), "New lead"], contacts: contactName ? [{ id: Date.now() + 1, name: contactName, title: String(form.get("title") ?? ""), email: String(form.get("email") ?? "") }] : [] });
     setLeads((current) => [next, ...current]); void persistLead(next); setSelectedId(next.id); setShowAdd(false); announce(`${next.name} added to the database`);
   }
 
@@ -136,16 +165,17 @@ export default function Home() {
     return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 16);
   }
 
-  function openLogForm(lead: Lead, log?: ActionLog) {
+  function openLogForm(lead: Lead, log?: ActionLog, contactId?: number) {
     setLoggingId(lead.id);
     setEditingLogId(log?.id ?? null);
+    setLogContactId(log?.contactId ?? contactId ?? primaryContact(lead).id ?? null);
     setLogDraft({ action: log?.action ?? "E-mailed", details: log?.details ?? "", occurredAt: log?.occurredAt ?? localDateTime() });
   }
 
   function saveLog(event: React.FormEvent<HTMLFormElement>, leadId: number) {
     event.preventDefault();
     if (!logDraft.details.trim() || !logDraft.occurredAt) return;
-    const nextLog: ActionLog = { id: editingLogId ?? Date.now(), action: logDraft.action, details: logDraft.details.trim(), occurredAt: logDraft.occurredAt };
+    const nextLog: ActionLog = { id: editingLogId ?? Date.now(), action: logDraft.action, details: logDraft.details.trim(), occurredAt: logDraft.occurredAt, contactId: logContactId ?? undefined };
     const lead = leads.find((item) => item.id === leadId);
     if (!lead) return;
     const actions = lead.actions ?? [];
@@ -155,6 +185,19 @@ export default function Home() {
     announce(`${editingLogId ? "Log updated for" : "Action logged for"} ${lead?.name ?? "contact"}`);
     setLoggingId(null);
     setEditingLogId(null);
+    setLogContactId(null);
+  }
+
+  function addContact(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) return;
+    const form = new FormData(event.currentTarget);
+    const contact: Contact = { id: Date.now(), name: String(form.get("contactName")), title: String(form.get("contactTitle")), email: String(form.get("contactEmail")), phone: String(form.get("contactPhone") ?? "") };
+    const updatedLead = { ...selected, contacts: [...contactsFor(selected), contact] };
+    setLeads((current) => current.map((lead) => lead.id === selected.id ? updatedLead : lead));
+    void persistLead(updatedLead);
+    setShowAddContact(false);
+    announce(`${contact.name} added to ${selected.name}`);
   }
 
   function cycleStatus() {
@@ -181,7 +224,7 @@ export default function Home() {
       <header className="topbar"><div className="crumb">PROJECTS <span>/</span> NORMA <span>/</span> {workspace.toUpperCase()}</div><div className="top-actions"><span className="sync"><i /> Synced just now</span><button className="icon-button" onClick={() => announce("Select a contact to inspect its full information")} aria-label="Help">?</button><button className="avatar top-avatar" onClick={() => announce("Producer profile: Taylor Cooper")} aria-label="Open profile">TC</button></div></header>
       {workspace === "Pipeline" ? <>
         <div className="headline pipeline-headline"><div><div className="kicker">NORMA · WORKING PIPELINE</div><h1>Move every contact<br /><i>toward a yes.</i></h1><p className="subhead">Work through the database one contact at a time. Drag cards left to right or use the arrow to advance them.</p></div><div className="headline-actions"><button className="button quiet" onClick={() => setWorkspace("Lead database")}>← Lead database</button></div></div>
-        <div className="pipeline-toolbar"><div><strong>{leads.length}</strong> contacts in pipeline</div><span>Click a card to view full information in the Lead database.</span></div>
+        <div className="pipeline-toolbar"><div><strong>{leads.length}</strong> companies · <strong>{leads.reduce((total, lead) => total + lead.contacts.length, 0)}</strong> contacts</div><span>Move companies left to right, then log activity against a specific person.</span></div>
         <section className="pipeline-board">{pipelineStages.map((stage, index) => <div className="pipeline-column" key={stage} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedId !== null) { updateStatus(draggedId, stage); announce(`Contact moved to ${stage}`); setDraggedId(null); } }}><div className="column-head"><div><span className={`stage-dot stage-${index}`} /><h2>{stage}</h2></div><b>{pipelineLeads(stage).length}</b></div><div className="column-body">{pipelineLeads(stage).map((lead) => <article className={`pipeline-card ${selected?.id === lead.id ? "selected" : ""}`} draggable key={lead.id} onDragStart={() => setDraggedId(lead.id)} onClick={() => { setSelectedId(lead.id); setWorkspace("Lead database"); }}><div className="card-top"><span className={`tier tier-${lead.tier.toLowerCase()}`}>{lead.tier}</span><span>{lead.fit}/10 fit</span></div><h3>{lead.name}</h3><p>{lead.type} · {lead.city}, {lead.state}</p><div className="card-contact">{lead.contact}<span>{lead.next}</span></div>{lead.actions?.[0] && <div className="latest-action"><strong>{lead.actions[0].action}</strong><span>{lead.actions[0].details}</span><small>{new Date(lead.actions[0].occurredAt).toLocaleString()}</small><button onClick={(event) => { event.stopPropagation(); openLogForm(lead, lead.actions![0]); }}>Edit</button></div>}<div className="card-actions">{index < pipelineStages.length - 1 && <button className="advance" onClick={(event) => { event.stopPropagation(); moveForward(lead); }}>Move forward →</button>}<button className="log-action" onClick={(event) => { event.stopPropagation(); openLogForm(lead); }}>{lead.actions?.length ? "Log another action" : "Log action"}</button></div>{loggingId === lead.id && <form className="log-form" onSubmit={(event) => saveLog(event, lead.id)} onClick={(event) => event.stopPropagation()}><label>Action<select value={logDraft.action} onChange={(event) => setLogDraft({ ...logDraft, action: event.target.value })}><option>E-mailed</option><option>Called</option><option>Texted</option><option>Meeting</option><option>Other</option></select></label><label>Event details<textarea value={logDraft.details} onChange={(event) => setLogDraft({ ...logDraft, details: event.target.value })} placeholder="What happened?" rows={3} required /></label><label>Time<input type="datetime-local" value={logDraft.occurredAt} onChange={(event) => setLogDraft({ ...logDraft, occurredAt: event.target.value })} required /></label><div className="log-form-actions"><button type="button" onClick={() => { setLoggingId(null); setEditingLogId(null); }}>Cancel</button><button type="submit">{editingLogId ? "Save changes" : "Save log"}</button></div></form>}</article>)}{pipelineLeads(stage).length === 0 && <div className="drop-hint">Drop a contact here</div>}</div></div>)}</section>
       </> : <>
         <div className="headline"><div><div className="kicker">INDEPENDENT FEATURE · FINANCING CRM</div><h1>Every contact,<br /><i>all the context.</i></h1><p className="subhead">The complete Norma financing database for Taylor Cooper.</p></div><div className="headline-actions"><button className="button quiet" onClick={exportCsv}>↧ Export CSV</button><button className="button primary" onClick={() => setShowAdd(true)}>＋ Add lead</button></div></div>
@@ -195,6 +238,6 @@ export default function Home() {
       </>}
     </section>
     {showAdd && <div className="modal-backdrop" onClick={() => setShowAdd(false)}><form className="modal" onSubmit={addLead} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><div className="kicker">NEW RECORD</div><h2>Add a lead</h2></div><button type="button" onClick={() => setShowAdd(false)}>×</button></div><label>Company name<input name="name" required placeholder="e.g. Bright Harbor Films" /></label><div className="form-grid"><label>Type<select name="type" defaultValue="Production">{categories.slice(1).map((category) => <option key={category}>{category}</option>)}</select></label><label>City<input name="city" placeholder="Los Angeles" /></label><label>State<input name="state" placeholder="CA" /></label><label>Website<input name="website" placeholder="company.com" /></label></div><button className="button primary full">Add to database</button></form></div>}
-    {toast && <div className="toast">{toast}</div>}
+    {showAddContact && selected && <div className="modal-backdrop" onClick={() => setShowAddContact(false)}><form className="modal" onSubmit={addContact} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><div className="kicker">NEW CONTACT</div><h2>Add a contact</h2></div><button type="button" onClick={() => setShowAddContact(false)}>×</button></div><label>Name<input name="contactName" required placeholder="Jane Smith" /></label><div className="form-grid"><label>Title<input name="contactTitle" placeholder="Producer / Partner" /></label><label>Email<input name="contactEmail" type="email" placeholder="jane@company.com" /></label><label>Phone<input name="contactPhone" placeholder="Optional" /></label></div><button className="button primary full">Add contact</button></form></div>}{toast && <div className="toast">{toast}</div>}
   </main>;
 }
