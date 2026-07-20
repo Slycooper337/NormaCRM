@@ -61,6 +61,7 @@ const seedLeads: Lead[] = [
 
 const categories = ["All leads", "Packaging", "Production", "Finance", "Sales Agent", "Investor", "Producer Rep", "Tax Credit Lender", "Film Lab", "Attorney", "Film Market"];
 const pipelineStages = ["Researching", "To contact", "Needs warm intro", "Follow-up", "Closed"];
+const localStorageKey = "norma-crm-leads";
 
 function normalizeLead(raw: Omit<Lead, "contacts"> & Partial<Pick<Lead, "contacts">>): Lead {
   const legacyContact = raw.contact && raw.contact !== "-" ? [{ id: raw.id * 100 + 1, name: raw.contact, title: raw.title === "-" ? "" : raw.title, email: raw.email === "-" ? "" : raw.email }] : [];
@@ -96,14 +97,26 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
+    const savedLocally = () => {
+      try {
+        const stored = window.localStorage.getItem(localStorageKey);
+        return stored ? JSON.parse(stored) as Lead[] : null;
+      } catch {
+        return null;
+      }
+    };
+    const applyLocalFallback = () => {
+      const stored = savedLocally();
+      if (!cancelled && stored?.length) setLeads(stored.map(normalizeLead));
+    };
     fetch("/api/leads")
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Could not load saved leads")))
       .then(async (data: { leads?: Lead[] }) => {
         if (cancelled) return;
-        if (data.leads?.length) { const merged = [...data.leads, ...coreLeads.filter((lead) => !data.leads!.some((item) => item.id === lead.id))].map(normalizeLead); setLeads(merged); void fetch("/api/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leads: merged }) }); }
-        else await fetch("/api/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leads: seedLeads }) });
+        if (data.leads?.length) { const merged = [...data.leads, ...coreLeads.filter((lead) => !data.leads!.some((item) => item.id === lead.id))].map(normalizeLead); setLeads(merged); window.localStorage.setItem(localStorageKey, JSON.stringify(merged)); void fetch("/api/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leads: merged }) }); }
+        else { const merged = [...seedLeads, ...coreLeads].map(normalizeLead); setLeads(merged); window.localStorage.setItem(localStorageKey, JSON.stringify(merged)); await fetch("/api/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leads: merged }) }); }
       })
-      .catch(() => { if (!cancelled) announce("Saved data is temporarily unavailable"); });
+      .catch(() => { applyLocalFallback(); if (!cancelled) announce("Using local browser storage"); });
     return () => { cancelled = true; };
   }, []);
 
@@ -123,7 +136,12 @@ export default function Home() {
   }
 
   function persistLead(lead: Lead) {
-    return fetch("/api/leads", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(lead) });
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(localStorageKey) ?? "[]") as Lead[];
+      const next = [...stored.filter((item) => item.id !== lead.id), lead];
+      window.localStorage.setItem(localStorageKey, JSON.stringify(next));
+    } catch { /* The API remains the persistence path when local storage is unavailable. */ }
+    return fetch("/api/leads", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(lead) }).catch(() => undefined);
   }
 
   function exportCsv() {
@@ -216,7 +234,7 @@ export default function Home() {
 
   return <main className="shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-logo"><img src="/scope-creep-logo.png" alt="Scope Creep" /></div><div><div className="eyebrow">Scope Creep LLC</div><div className="brand-name">Norma / financing</div></div></div>
+      <div className="brand"><div className="brand-logo"><img src="./scope-creep-logo.png" alt="Scope Creep" /></div><div><div className="eyebrow">Scope Creep LLC</div><div className="brand-name">Norma / financing</div></div></div>
       <div className="project-card"><span className="pulse" /> <span>Active project</span><strong>Norma</strong><small>Feature film · $90K budget</small></div>
       <nav><div className="nav-label">Workspace</div>{[["Lead database", "◈", String(leads.length)], ["Pipeline", "→", String(leads.filter((lead) => lead.status !== "Closed").length)]].map(([label, icon, count]) => <button key={label} onClick={() => { setWorkspace(label as "Lead database" | "Pipeline"); announce(`${label} selected`); }} className={`nav-item ${workspace === label ? "active" : ""}`}><span>{icon}</span> {label} <b>{count}</b></button>)}</nav>
       <div className="sidebar-bottom"><div className="nav-label">Project snapshot</div><div className="mini-row"><span>Raised</span><strong>$28K <em>/ $90K</em></strong></div><div className="progress"><i /></div><div className="mini-row"><span>Production</span><strong>Jan 2027</strong></div><div className="mini-row"><span>Package</span><strong>65% ready</strong></div><div className="avatar-row"><div className="avatar">TC</div><span>Taylor Cooper<br /><small>Producer · sole user</small></span><button aria-label="Settings" onClick={() => announce("Settings are ready for a future workspace update")}>⚙</button></div></div>
