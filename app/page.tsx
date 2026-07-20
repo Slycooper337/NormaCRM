@@ -2,6 +2,13 @@
 
 import { useMemo, useState } from "react";
 
+type ActionLog = {
+  id: number;
+  action: string;
+  details: string;
+  occurredAt: string;
+};
+
 type Lead = {
   id: number;
   name: string;
@@ -20,6 +27,7 @@ type Lead = {
   next: string;
   note: string;
   tags: string[];
+  actions?: ActionLog[];
 };
 
 const seedLeads: Lead[] = [
@@ -54,6 +62,9 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [statusFilter, setStatusFilter] = useState("All statuses");
   const [draggedId, setDraggedId] = useState<number | null>(null);
+  const [loggingId, setLoggingId] = useState<number | null>(null);
+  const [editingLogId, setEditingLogId] = useState<number | null>(null);
+  const [logDraft, setLogDraft] = useState({ action: "E-mailed", details: "", occurredAt: "" });
 
   const filtered = useMemo(() => leads.filter((lead) => {
     const matchesCategory = activeCategory === "All leads" || lead.type === activeCategory;
@@ -98,6 +109,33 @@ export default function Home() {
     }
   }
 
+  function localDateTime() {
+    const date = new Date();
+    const offset = date.getTimezoneOffset();
+    return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 16);
+  }
+
+  function openLogForm(lead: Lead, log?: ActionLog) {
+    setLoggingId(lead.id);
+    setEditingLogId(log?.id ?? null);
+    setLogDraft({ action: log?.action ?? "E-mailed", details: log?.details ?? "", occurredAt: log?.occurredAt ?? localDateTime() });
+  }
+
+  function saveLog(event: React.FormEvent<HTMLFormElement>, leadId: number) {
+    event.preventDefault();
+    if (!logDraft.details.trim() || !logDraft.occurredAt) return;
+    const nextLog: ActionLog = { id: editingLogId ?? Date.now(), action: logDraft.action, details: logDraft.details.trim(), occurredAt: logDraft.occurredAt };
+    setLeads((current) => current.map((lead) => {
+      if (lead.id !== leadId) return lead;
+      const actions = lead.actions ?? [];
+      return { ...lead, actions: editingLogId ? actions.map((log) => log.id === editingLogId ? nextLog : log) : [nextLog, ...actions] };
+    }));
+    const lead = leads.find((item) => item.id === leadId);
+    announce(`${editingLogId ? "Log updated for" : "Action logged for"} ${lead?.name ?? "contact"}`);
+    setLoggingId(null);
+    setEditingLogId(null);
+  }
+
   function cycleStatus() {
     if (!selected) return;
     const stage = pipelineStages.indexOf(selected.status);
@@ -123,7 +161,7 @@ export default function Home() {
       {workspace === "Pipeline" ? <>
         <div className="headline pipeline-headline"><div><div className="kicker">NORMA · WORKING PIPELINE</div><h1>Move every contact<br /><i>toward a yes.</i></h1><p className="subhead">Work through the database one contact at a time. Drag cards left to right or use the arrow to advance them.</p></div><div className="headline-actions"><button className="button quiet" onClick={() => setWorkspace("Lead database")}>← Lead database</button></div></div>
         <div className="pipeline-toolbar"><div><strong>{leads.length}</strong> contacts in pipeline</div><span>Click a card to view full information in the Lead database.</span></div>
-        <section className="pipeline-board">{pipelineStages.map((stage, index) => <div className="pipeline-column" key={stage} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedId !== null) { updateStatus(draggedId, stage); announce(`Contact moved to ${stage}`); setDraggedId(null); } }}><div className="column-head"><div><span className={`stage-dot stage-${index}`} /><h2>{stage}</h2></div><b>{pipelineLeads(stage).length}</b></div><div className="column-body">{pipelineLeads(stage).map((lead) => <article className={`pipeline-card ${selected?.id === lead.id ? "selected" : ""}`} draggable key={lead.id} onDragStart={() => setDraggedId(lead.id)} onClick={() => { setSelectedId(lead.id); setWorkspace("Lead database"); }}><div className="card-top"><span className={`tier tier-${lead.tier.toLowerCase()}`}>{lead.tier}</span><span>{lead.fit}/10 fit</span></div><h3>{lead.name}</h3><p>{lead.type} · {lead.city}, {lead.state}</p><div className="card-contact">{lead.contact}<span>{lead.next}</span></div>{index < pipelineStages.length - 1 && <button className="advance" onClick={(event) => { event.stopPropagation(); moveForward(lead); }}>Move forward →</button>}</article>)}{pipelineLeads(stage).length === 0 && <div className="drop-hint">Drop a contact here</div>}</div></div>)}</section>
+        <section className="pipeline-board">{pipelineStages.map((stage, index) => <div className="pipeline-column" key={stage} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedId !== null) { updateStatus(draggedId, stage); announce(`Contact moved to ${stage}`); setDraggedId(null); } }}><div className="column-head"><div><span className={`stage-dot stage-${index}`} /><h2>{stage}</h2></div><b>{pipelineLeads(stage).length}</b></div><div className="column-body">{pipelineLeads(stage).map((lead) => <article className={`pipeline-card ${selected?.id === lead.id ? "selected" : ""}`} draggable key={lead.id} onDragStart={() => setDraggedId(lead.id)} onClick={() => { setSelectedId(lead.id); setWorkspace("Lead database"); }}><div className="card-top"><span className={`tier tier-${lead.tier.toLowerCase()}`}>{lead.tier}</span><span>{lead.fit}/10 fit</span></div><h3>{lead.name}</h3><p>{lead.type} · {lead.city}, {lead.state}</p><div className="card-contact">{lead.contact}<span>{lead.next}</span></div>{lead.actions?.[0] && <div className="latest-action"><strong>{lead.actions[0].action}</strong><span>{lead.actions[0].details}</span><small>{new Date(lead.actions[0].occurredAt).toLocaleString()}</small><button onClick={(event) => { event.stopPropagation(); openLogForm(lead, lead.actions![0]); }}>Edit</button></div>}<div className="card-actions">{index < pipelineStages.length - 1 && <button className="advance" onClick={(event) => { event.stopPropagation(); moveForward(lead); }}>Move forward →</button>}<button className="log-action" onClick={(event) => { event.stopPropagation(); openLogForm(lead); }}>{lead.actions?.length ? "Log another action" : "Log action"}</button></div>{loggingId === lead.id && <form className="log-form" onSubmit={(event) => saveLog(event, lead.id)} onClick={(event) => event.stopPropagation()}><label>Action<select value={logDraft.action} onChange={(event) => setLogDraft({ ...logDraft, action: event.target.value })}><option>E-mailed</option><option>Called</option><option>Texted</option><option>Meeting</option><option>Other</option></select></label><label>Event details<textarea value={logDraft.details} onChange={(event) => setLogDraft({ ...logDraft, details: event.target.value })} placeholder="What happened?" rows={3} required /></label><label>Time<input type="datetime-local" value={logDraft.occurredAt} onChange={(event) => setLogDraft({ ...logDraft, occurredAt: event.target.value })} required /></label><div className="log-form-actions"><button type="button" onClick={() => { setLoggingId(null); setEditingLogId(null); }}>Cancel</button><button type="submit">{editingLogId ? "Save changes" : "Save log"}</button></div></form>}</article>)}{pipelineLeads(stage).length === 0 && <div className="drop-hint">Drop a contact here</div>}</div></div>)}</section>
       </> : <>
         <div className="headline"><div><div className="kicker">INDEPENDENT FEATURE · FINANCING CRM</div><h1>Every contact,<br /><i>all the context.</i></h1><p className="subhead">The complete Norma financing database for Taylor Cooper.</p></div><div className="headline-actions"><button className="button quiet" onClick={exportCsv}>↧ Export CSV</button><button className="button primary" onClick={() => setShowAdd(true)}>＋ Add lead</button></div></div>
         <div className="stats"><div className="stat"><span className="stat-icon">◎</span><div><strong>{leads.length}</strong><small>Total leads</small></div><em>Database</em></div><div className="stat"><span className="stat-icon">★</span><div><strong>{aCount}</strong><small>Priority A</small></div><em>Needs action</em></div><div className="stat"><span className="stat-icon">→</span><div><strong>{leads.filter((lead) => lead.status !== "Closed").length}</strong><small>In pipeline</small></div><em>Working contacts</em></div><div className="stat"><span className="stat-icon">◷</span><div><strong>164</strong><small>Days to prep</small></div><em>Jan 2027 start</em></div></div>
