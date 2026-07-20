@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { coreLeads } from "../data/core-leads";
 
 type ActionLog = {
   id: number;
@@ -58,7 +59,7 @@ const seedLeads: Lead[] = [
   { id: 14, name: "Georgia Film, Music & Digital Entertainment", type: "Tax Credit", city: "Atlanta", state: "GA", country: "USA", range: "$50K-$20M", fit: 8, tier: "A", contact: "Production Incentives", title: "Film Office", email: "film@georgia.org", website: "georgia.org", status: "To contact", next: "Jul 31", note: "Important incentive comparison for a Southeast production plan; confirm minimum spend and audit mechanics.", tags: ["Tax credit", "Georgia", "Film commission"] },
 ];
 
-const categories = ["All leads", "Packaging", "Production", "Finance", "Producer Rep", "Tax Credit", "Film Lab", "Attorney", "Film Market"];
+const categories = ["All leads", "Packaging", "Production", "Finance", "Sales Agent", "Investor", "Producer Rep", "Tax Credit Lender", "Film Lab", "Attorney", "Film Market"];
 const pipelineStages = ["Researching", "To contact", "Needs warm intro", "Follow-up", "Closed"];
 
 function normalizeLead(raw: Omit<Lead, "contacts"> & Partial<Pick<Lead, "contacts">>): Lead {
@@ -76,7 +77,7 @@ function primaryContact(lead: Lead) {
 }
 
 export default function Home() {
-  const [leads, setLeads] = useState(seedLeads.map(normalizeLead));
+  const [leads, setLeads] = useState([...seedLeads, ...coreLeads].map(normalizeLead));
   const [activeCategory, setActiveCategory] = useState("All leads");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(1);
@@ -99,7 +100,7 @@ export default function Home() {
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Could not load saved leads")))
       .then(async (data: { leads?: Lead[] }) => {
         if (cancelled) return;
-        if (data.leads?.length) setLeads(data.leads.map(normalizeLead));
+        if (data.leads?.length) { const merged = [...data.leads, ...coreLeads.filter((lead) => !data.leads!.some((item) => item.id === lead.id))].map(normalizeLead); setLeads(merged); void fetch("/api/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leads: merged }) }); }
         else await fetch("/api/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leads: seedLeads }) });
       })
       .catch(() => { if (!cancelled) announce("Saved data is temporarily unavailable"); });
